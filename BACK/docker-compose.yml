@@ -1,0 +1,136 @@
+version: '3'
+services:
+  # Serviço de Usuários
+  user-service:
+    build:
+      context: ./user-service
+    ports:
+      - "5045:5045"
+    environment:
+      - DATABASE_URL=postgres://user:password@db:5432/users_db
+    depends_on:
+      - db
+    networks:
+      - mimo_network
+    volumes:
+      - ./user-service:/usr/src/app
+      - ./proto:/usr/src/app/proto
+
+  # Serviço de Produtos
+  product-service:
+    build:
+      context: ./product-service
+    ports:
+      - "5002:5002"
+    environment:
+      - DATABASE_URL=postgres://user:password@db:5432/products_db
+    depends_on:
+      - db
+    networks:
+      - mimo_network
+    volumes:
+      - ./product-service:/usr/src/app
+      - ./proto:/usr/src/app/proto
+
+  # Serviço de Mensageria RabbitMQ
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - mimo_network
+
+  # Serviço de Pagamento (consome pedido e confirma pagamento)
+  pagamento:
+    build:
+      context: ./pagamento
+    depends_on:
+      - rabbitmq
+    networks:
+      - mimo_network
+    volumes:
+      - ./pagamento:/usr/src/app
+    command: node consumidorPagamento.js
+
+  # Serviço de Produtor (envia pedidos para a fila)
+  produtor:
+    build:
+      context: ./produtor-service
+    depends_on:
+      - rabbitmq
+    networks:
+      - mimo_network
+    volumes:
+      - ./produtor-service:/usr/src/app
+
+  # Serviço de Entrega (API REST + consumidores)
+  entrega-service:
+    build:
+      context: ./entrega-service
+    command: >
+      sh -c "node index.js & node escutarConfirmacaoPagamento.js && wait"
+    depends_on:
+      - rabbitmq
+    networks:
+      - mimo_network
+    ports:
+      - "3002:3002"
+    volumes:
+      - ./entrega-service:/usr/src/app
+
+  # API Gateway
+  api-gateway:
+    build:
+      context: ./api-gateway
+    ports:
+      - "3045:3045"
+    depends_on:
+      - product-service
+      - user-service
+      - pagamento
+
+  # Banco de Dados
+  db:
+    image: postgres:13
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=users_db
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    networks:
+      - mimo_network
+
+  # Serviço Prometheus
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    networks:
+      - mimo_network
+    restart: always
+
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    ports:
+      - "3001:3001"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    networks:
+      - mimo_network
+    depends_on:
+      - prometheus
+    restart: always
+
+networks:
+  mimo_network:
+    driver: bridge
+
+volumes:
+  db_data:
